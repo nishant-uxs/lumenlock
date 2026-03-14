@@ -149,7 +149,7 @@ def send_money(request):
         amount = data.get('amount')
         encryption_key = data.get('transaction_password')
         
-        if not destination_public_key or not amount or not encryption_key:
+        if not destination_public_key or amount is None or amount == '' or not encryption_key:
             return JsonResponse({
                 'status': 'error',
                 'message': 'Missing required fields'
@@ -287,6 +287,9 @@ def dashboard(request):
         return render(request, 'dashboard.html', {'wallet_exists': False})
     
     try:
+        if not is_valid_stellar_address(wallet.public_key):
+            raise ValueError('Invalid wallet public key')
+        
         server = Server("https://horizon-testnet.stellar.org")
         server.client.request_timeout = 10
         account = server.accounts().account_id(wallet.public_key).call()
@@ -322,6 +325,12 @@ def transaction_history(request):
                 'status': 'error',
                 'message': 'No wallet found'
             }, status=404)
+        
+        if not is_valid_stellar_address(wallet.public_key):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Wallet has invalid Stellar address'
+            }, status=400)
         
         server = Server("https://horizon-testnet.stellar.org")
         server.client.request_timeout = 10

@@ -93,7 +93,13 @@ def check_balance(request):
 def send_money(request):
     if request.method == 'POST':
         try:
-            data = json.loads(request.body)
+            try:
+                data = json.loads(request.body)
+            except json.JSONDecodeError:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Invalid JSON data'
+                }, status=400)
             destination_public_key = data.get('recipient')
             amount = data.get('amount')
             encryption_key = data.get('transaction_password')
@@ -193,7 +199,11 @@ def is_valid_stellar_address(address):
         return False
     if not re.match(r'^[A-Z2-7]+$', address):
         return False
-    return True
+    try:
+        Keypair.from_public_key(address)
+        return True
+    except Exception:
+        return False
 
 @login_required
 def dashboard(request):
@@ -231,23 +241,21 @@ def transaction_history(request):
             }, status=404)
         
         server = Server("https://horizon-testnet.stellar.org")
-        transactions = server.transactions().for_account(wallet.public_key).limit(20).order(desc=True).call()
+        operations = server.operations().for_account(wallet.public_key).limit(20).order(desc=True).include_transactions(True).call()
         
         transaction_list = []
-        for tx in transactions['_embedded']['records']:
-            operations = server.operations().for_transaction(tx['hash']).call()
-            
-            for op in operations['_embedded']['records']:
-                if op['type'] == 'payment' or op['type'] == 'create_account':
-                    transaction_list.append({
-                        'hash': tx['hash'],
-                        'created_at': tx['created_at'],
-                        'type': op['type'],
-                        'from': op.get('from', op.get('funder', 'N/A')),
-                        'to': op.get('to', op.get('account', 'N/A')),
-                        'amount': op.get('amount', op.get('starting_balance', '0')),
-                        'asset_type': op.get('asset_type', 'native')
-                    })
+        for op in operations['_embedded']['records']:
+            if op['type'] == 'payment' or op['type'] == 'create_account':
+                tx = op.get('transaction')
+                transaction_list.append({
+                    'hash': op.get('transaction_hash', 'N/A'),
+                    'created_at': op.get('created_at', ''),
+                    'type': op['type'],
+                    'from': op.get('from', op.get('funder', 'N/A')),
+                    'to': op.get('to', op.get('account', 'N/A')),
+                    'amount': op.get('amount', op.get('starting_balance', '0')),
+                    'asset_type': op.get('asset_type', 'native')
+                })
         
         return JsonResponse({
             'status': 'success',

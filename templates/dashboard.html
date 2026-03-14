@@ -269,13 +269,21 @@
       })
       .catch((error) => {
         console.error("Error loading transaction history:", error);
-        document.getElementById("transactionHistoryContent").innerHTML = `
+        const content = document.getElementById("transactionHistoryContent");
+        content.innerHTML = `
           <div class="text-center py-8">
             <p class="text-error">Failed to load transaction history</p>
-            <p class="text-sm mt-2">${error.message}</p>
+            <p class="text-sm mt-2" id="errorMsg"></p>
           </div>
         `;
+        document.getElementById("errorMsg").textContent = error.message;
       });
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   function displayTransactionHistory(transactions) {
@@ -306,23 +314,28 @@
     `;
 
     transactions.forEach((tx) => {
-      const date = new Date(tx.created_at).toLocaleString();
-      const shortHash = tx.hash.substring(0, 8) + "...";
-      const shortFrom = tx.from.substring(0, 8) + "...";
-      const shortTo = tx.to.substring(0, 8) + "...";
+      const date = escapeHtml(new Date(tx.created_at).toLocaleString());
+      const hash = escapeHtml(tx.hash || 'N/A');
+      const shortHash = escapeHtml(hash.substring(0, 8) + "...");
+      const from = escapeHtml(tx.from || 'N/A');
+      const shortFrom = escapeHtml(from.substring(0, 8) + "...");
+      const to = escapeHtml(tx.to || 'N/A');
+      const shortTo = escapeHtml(to.substring(0, 8) + "...");
+      const type = escapeHtml(tx.type || 'unknown');
+      const amount = parseFloat(tx.amount || 0).toFixed(2);
       
       tableHTML += `
         <tr>
           <td class="text-xs">${date}</td>
-          <td><span class="badge ${tx.type === 'payment' ? 'badge-primary' : 'badge-success'}">${tx.type}</span></td>
-          <td class="text-xs" title="${tx.from}">${shortFrom}</td>
-          <td class="text-xs" title="${tx.to}">${shortTo}</td>
-          <td>${parseFloat(tx.amount).toFixed(2)}</td>
+          <td><span class="badge ${type === 'payment' ? 'badge-primary' : 'badge-success'}">${type}</span></td>
+          <td class="text-xs" title="${from}">${shortFrom}</td>
+          <td class="text-xs" title="${to}">${shortTo}</td>
+          <td>${amount}</td>
           <td class="text-xs">
-            <a href="https://stellar.expert/explorer/testnet/tx/${tx.hash}" 
+            <a href="https://stellar.expert/explorer/testnet/tx/${hash}" 
                target="_blank" 
                class="link link-primary"
-               title="${tx.hash}">
+               title="${hash}">
               ${shortHash}
             </a>
           </td>

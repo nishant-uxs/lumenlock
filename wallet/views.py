@@ -250,6 +250,9 @@ def dashboard(request):
         return render(request, 'dashboard.html', {'wallet_exists': wallet_exists})
     
     wallet = Wallet.objects.filter(user=request.user).first()
+    if not wallet:
+        return render(request, 'dashboard.html', {'wallet_exists': False})
+    
     try:
         server = Server("https://horizon-testnet.stellar.org")
         server.client.request_timeout = 10
@@ -263,15 +266,15 @@ def dashboard(request):
                 break
         
         context = {
-            'wallet_exists': wallet_exists,
+            'wallet_exists': True,
             'balance': native_balance,
             'public_key': wallet.public_key
         }
     except Exception as e:
         context = {
-            'wallet_exists': wallet_exists,
+            'wallet_exists': True,
             'balance': '0',
-            'public_key': wallet.public_key,
+            'public_key': wallet.public_key if wallet else '',
             'error': f'Error loading wallet data: {str(e)}'
         }
     return render(request, 'dashboard.html', context)

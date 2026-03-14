@@ -322,7 +322,10 @@
       const to = escapeHtml(tx.to || 'N/A');
       const shortTo = escapeHtml(to.substring(0, 8) + "...");
       const type = escapeHtml(tx.type || 'unknown');
-      const amount = parseFloat(tx.amount || 0).toFixed(2);
+      
+      const rawAmount = tx.amount || '0';
+      const formattedAmount = parseFloat(rawAmount).toFixed(7).replace(/\.?0+$/, '');
+      const assetType = tx.asset_type === 'native' ? 'XLM' : escapeHtml(tx.asset_type || 'XLM');
       
       tableHTML += `
         <tr>
@@ -330,7 +333,7 @@
           <td><span class="badge ${type === 'payment' ? 'badge-primary' : 'badge-success'}">${type}</span></td>
           <td class="text-xs" title="${from}">${shortFrom}</td>
           <td class="text-xs" title="${to}">${shortTo}</td>
-          <td>${amount}</td>
+          <td>${formattedAmount} ${assetType}</td>
           <td class="text-xs">
             <a href="https://stellar.expert/explorer/testnet/tx/${hash}" 
                target="_blank" 

@@ -21,6 +21,12 @@ def home(request):
 
 @login_required
 def create_wallet(request):
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Method not allowed'
+        }, status=405)
+    
     if Wallet.objects.filter(user=request.user).exists():
         return redirect('dashboard')
     
@@ -34,6 +40,13 @@ def create_wallet(request):
     try:
         keypair = Keypair.random()
         encrypted_secret_seed = cryptocode.encrypt(keypair.secret, encryption_key)
+        
+        if not encrypted_secret_seed:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Failed to encrypt wallet secret'
+            }, status=500)
+        
         wallet = Wallet.objects.create(
             user=request.user,
             public_key=keypair.public_key,
@@ -118,135 +131,135 @@ def check_balance(request):
 
 @login_required
 def send_money(request):
-    if request.method == 'POST':
-        try:
-            try:
-                data = json.loads(request.body)
-            except json.JSONDecodeError:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Invalid JSON data'
-                }, status=400)
-            destination_public_key = data.get('recipient')
-            amount = data.get('amount')
-            encryption_key = data.get('transaction_password')
-            
-            if not destination_public_key or not amount or not encryption_key:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Missing required fields'
-                }, status=400)
-            
-            if not is_valid_stellar_address(destination_public_key):
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Invalid recipient address'
-                }, status=400)
-            
-            try:
-                amount_decimal = Decimal(str(amount))
-                if amount_decimal <= 0:
-                    return JsonResponse({
-                        'status': 'error',
-                        'message': 'Amount must be greater than 0'
-                    }, status=400)
-                if amount_decimal.as_tuple().exponent < -7:
-                    return JsonResponse({
-                        'status': 'error',
-                        'message': 'Amount cannot have more than 7 decimal places'
-                    }, status=400)
-                
-                quantized_amount = amount_decimal.quantize(Decimal('0.0000001'), rounding=ROUND_DOWN)
-                if quantized_amount <= 0:
-                    return JsonResponse({
-                        'status': 'error',
-                        'message': 'Amount too small (minimum 0.0000001 XLM)'
-                    }, status=400)
-                
-                amount = str(quantized_amount)
-            except (ValueError, InvalidOperation):
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Invalid amount format'
-                }, status=400)
-            
-            wallet = Wallet.objects.filter(user=request.user).first()
-            if not wallet:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'No wallet found for user'
-                }, status=404)
-            
-            server = Server("https://horizon-testnet.stellar.org")
-            server.client.request_timeout = 10
-            
-            decrypted_secret = cryptocode.decrypt(wallet.secret_seed, encryption_key)
-            if not decrypted_secret:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Incorrect transaction password'
-                }, status=401)
-            
-            try:
-                source_keypair = Keypair.from_secret(decrypted_secret)
-            except Exception:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Incorrect transaction password'
-                }, status=401)
-            
-            try:
-                source_account = server.load_account(source_keypair.public_key)
-            except NotFoundError:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Your wallet account not found. Please ensure it is funded.'
-                }, status=404)
-            
-            try:
-                destination_account = server.load_account(destination_public_key)
-            except NotFoundError:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Recipient account not found on Stellar network'
-                }, status=404)
-            
-            transaction = TransactionBuilder(
-                source_account=source_account,
-                network_passphrase=Network.TESTNET_NETWORK_PASSPHRASE,
-                base_fee=100
-            ).append_payment_op(
-                destination=destination_public_key,
-                amount=amount,
-                asset=Asset.native()
-            ).set_timeout(30).build()
-            
-            transaction.sign(source_keypair)
-            response = server.submit_transaction(transaction)
-            
-            return JsonResponse({
-                'message': 'Payment sent successfully',
-                'status': 'success',
-                'transaction_hash': response.get('hash', 'N/A')
-            })
-        
-        except BadRequestError as e:
-            logger.warning(f'Transaction failed for user {request.user.id}: {str(e)}')
-            return JsonResponse({
-                'status': 'error',
-                'message': 'Transaction failed. Please check your balance and try again.'
-            }, status=400)
-        except Exception as e:
-            logger.error(f'Error sending payment for user {request.user.id}: {str(e)}', exc_info=True)
-            return JsonResponse({
-                'status': 'error',
-                'message': 'Failed to send payment. Please try again later.'
-            }, status=500)
-    else:
+    if request.method != 'POST':
         return JsonResponse({
             'status': 'error',
             'message': 'Method not allowed'
         }, status=405)
+    
+    try:
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Invalid JSON data'
+            }, status=400)
+        destination_public_key = data.get('recipient')
+        amount = data.get('amount')
+        encryption_key = data.get('transaction_password')
+        
+        if not destination_public_key or not amount or not encryption_key:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required fields'
+            }, status=400)
+        
+        if not is_valid_stellar_address(destination_public_key):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Invalid recipient address'
+            }, status=400)
+        
+        try:
+            amount_decimal = Decimal(str(amount))
+            if amount_decimal <= 0:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Amount must be greater than 0'
+                }, status=400)
+            if amount_decimal.as_tuple().exponent < -7:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Amount cannot have more than 7 decimal places'
+                }, status=400)
+            
+            quantized_amount = amount_decimal.quantize(Decimal('0.0000001'), rounding=ROUND_DOWN)
+            if quantized_amount <= 0:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Amount too small (minimum 0.0000001 XLM)'
+                }, status=400)
+            
+            amount = str(quantized_amount)
+        except (ValueError, InvalidOperation):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Invalid amount format'
+            }, status=400)
+        
+        wallet = Wallet.objects.filter(user=request.user).first()
+        if not wallet:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'No wallet found for user'
+            }, status=404)
+        
+        server = Server("https://horizon-testnet.stellar.org")
+        server.client.request_timeout = 10
+        
+        decrypted_secret = cryptocode.decrypt(wallet.secret_seed, encryption_key)
+        if not decrypted_secret:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Incorrect transaction password'
+            }, status=401)
+        
+        try:
+            source_keypair = Keypair.from_secret(decrypted_secret)
+        except Exception:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Incorrect transaction password'
+            }, status=401)
+        
+        try:
+            source_account = server.load_account(source_keypair.public_key)
+        except NotFoundError:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Your wallet account not found. Please ensure it is funded.'
+            }, status=404)
+        
+        try:
+            destination_account = server.load_account(destination_public_key)
+        except NotFoundError:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Recipient account not found on Stellar network'
+            }, status=404)
+        
+        transaction = TransactionBuilder(
+            source_account=source_account,
+            network_passphrase=Network.TESTNET_NETWORK_PASSPHRASE,
+            base_fee=100
+        ).append_payment_op(
+            destination=destination_public_key,
+            amount=amount,
+            asset=Asset.native()
+        ).set_timeout(30).build()
+        
+        transaction.sign(source_keypair)
+        response = server.submit_transaction(transaction)
+        
+        return JsonResponse({
+            'message': 'Payment sent successfully',
+            'status': 'success',
+            'transaction_hash': response.get('hash', 'N/A')
+        })
+    
+    except BadRequestError as e:
+        logger.warning(f'Transaction failed for user {request.user.id}: {str(e)}')
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Transaction failed. Please check your balance and try again.'
+        }, status=400)
+    except Exception as e:
+        logger.error(f'Error sending payment for user {request.user.id}: {str(e)}', exc_info=True)
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Failed to send payment. Please try again later.'
+        }, status=500)
 
 def is_valid_stellar_address(address):
     if not address or not isinstance(address, str):
@@ -362,7 +375,8 @@ def transaction_history(request):
         
         return JsonResponse({
             'status': 'success',
-            'transactions': transaction_list
+            'transactions': transaction_list,
+            'truncated': len(transaction_list) < target_count and len(records) > 0
         })
     
     except NotFoundError:

@@ -18,6 +18,10 @@
       Receive Tokens
     </button>
 
+    <button class="btn btn-neutral" onclick="loadTransactionHistory()">
+      Transaction History
+    </button>
+
     {% else %}
     <p class="text-lg mb-2">You don't have a wallet yet.</p>
     <button class="btn btn-primary" onclick="createWalletModal.showModal()">
@@ -150,6 +154,24 @@
   </form>
 </dialog>
 
+<dialog id="transactionHistoryModal" class="modal">
+  <div class="modal-box border border-2 border-neutral max-w-4xl">
+    <div class="modal-header">
+      <h3 class="text-lg font-semibold">Transaction History</h3>
+    </div>
+    <div class="modal-body">
+      <div id="transactionHistoryContent" class="overflow-x-auto">
+        <div class="flex justify-center items-center py-8">
+          <span class="loading loading-spinner loading-lg"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
 <script>
   function sendTokens() {
     const recipient = document.getElementById("recipient").value;
@@ -207,7 +229,113 @@
       })
       .catch((error) => {
         console.error("There was a problem with the fetch operation:", error);
+        send_btn.disabled = false;
+        send_btn_text.classList.remove("loading");
+        Toastify({
+          text: "Error sending tokens. Please try again.",
+          duration: 3000,
+          close: true,
+          gravity: "top",
+          position: "center",
+          stopOnFocus: true,
+          style: {
+            background: "linear-gradient(to right, #ff5f6d, #ffc371)",
+          },
+        }).showToast();
       });
+  }
+
+  function loadTransactionHistory() {
+    transactionHistoryModal.showModal();
+    
+    fetch("{% url 'transaction_history' %}", {
+      method: "GET",
+      headers: {
+        "X-CSRFToken": "{{ csrf_token }}",
+      },
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Failed to load transaction history");
+        }
+        return response.json();
+      })
+      .then((data) => {
+        if (data.status === "success") {
+          displayTransactionHistory(data.transactions);
+        } else {
+          throw new Error(data.message || "Failed to load transactions");
+        }
+      })
+      .catch((error) => {
+        console.error("Error loading transaction history:", error);
+        document.getElementById("transactionHistoryContent").innerHTML = `
+          <div class="text-center py-8">
+            <p class="text-error">Failed to load transaction history</p>
+            <p class="text-sm mt-2">${error.message}</p>
+          </div>
+        `;
+      });
+  }
+
+  function displayTransactionHistory(transactions) {
+    const content = document.getElementById("transactionHistoryContent");
+    
+    if (transactions.length === 0) {
+      content.innerHTML = `
+        <div class="text-center py-8">
+          <p>No transactions found</p>
+        </div>
+      `;
+      return;
+    }
+
+    let tableHTML = `
+      <table class="table table-zebra w-full">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Type</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Amount (XLM)</th>
+            <th>Hash</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    transactions.forEach((tx) => {
+      const date = new Date(tx.created_at).toLocaleString();
+      const shortHash = tx.hash.substring(0, 8) + "...";
+      const shortFrom = tx.from.substring(0, 8) + "...";
+      const shortTo = tx.to.substring(0, 8) + "...";
+      
+      tableHTML += `
+        <tr>
+          <td class="text-xs">${date}</td>
+          <td><span class="badge ${tx.type === 'payment' ? 'badge-primary' : 'badge-success'}">${tx.type}</span></td>
+          <td class="text-xs" title="${tx.from}">${shortFrom}</td>
+          <td class="text-xs" title="${tx.to}">${shortTo}</td>
+          <td>${parseFloat(tx.amount).toFixed(2)}</td>
+          <td class="text-xs">
+            <a href="https://stellar.expert/explorer/testnet/tx/${tx.hash}" 
+               target="_blank" 
+               class="link link-primary"
+               title="${tx.hash}">
+              ${shortHash}
+            </a>
+          </td>
+        </tr>
+      `;
+    });
+
+    tableHTML += `
+        </tbody>
+      </table>
+    `;
+
+    content.innerHTML = tableHTML;
   }
 </script>
 

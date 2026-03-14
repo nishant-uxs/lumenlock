@@ -1,6 +1,7 @@
 from django.shortcuts import render
 from django.http import JsonResponse
 from stellar_sdk import Asset, Server, Keypair, TransactionBuilder, Network
+from stellar_sdk.exceptions import NotFoundError, BadRequestError
 from .models import Wallet
 import cryptocode
 from django.contrib.auth.models import User
@@ -9,6 +10,7 @@ import requests
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect
 import json
+import re
 
 def home(request):
     return render(request, 'home.html')
@@ -17,69 +19,248 @@ def home(request):
 def create_wallet(request):
     if Wallet.objects.filter(user=request.user).exists():
         return redirect('dashboard')
-    keypair = Keypair.random()
+    
     encryption_key = request.POST.get('password')
-    encrypted_secret_seed = keypair.secret
-    encrypted_secret_seed = cryptocode.encrypt(keypair.secret, encryption_key)
-    wallet = Wallet.objects.create(
-        user=User.objects.first(),
-        public_key=keypair.public_key,
-        secret_seed=encrypted_secret_seed
-    )
-    url = "https://friendbot.stellar.org"
-    response = requests.get(url, params={"addr": keypair.public_key})
-    return redirect('dashboard')
-
+    if not encryption_key or len(encryption_key) < 8:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Password must be at least 8 characters long'
+        }, status=400)
+    
+    try:
+        keypair = Keypair.random()
+        encrypted_secret_seed = cryptocode.encrypt(keypair.secret, encryption_key)
+        wallet = Wallet.objects.create(
+            user=request.user,
+            public_key=keypair.public_key,
+            secret_seed=encrypted_secret_seed
+        )
+        url = "https://friendbot.stellar.org"
+        response = requests.get(url, params={"addr": keypair.public_key}, timeout=10)
+        
+        if response.status_code != 200:
+            wallet.delete()
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Failed to fund wallet from friendbot'
+            }, status=500)
+        
+        return redirect('dashboard')
+    except Exception as e:
+        if 'wallet' in locals():
+            wallet.delete()
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Error creating wallet: {str(e)}'
+        }, status=500)
 
 def check_balance(request):
-    public_key = request.POST.get('public_key')
-    if not public_key:
-        wallet = Wallet.objects.filter(user=request.user)[0]
-        public_key = wallet.public_key
-    server = Server("https://horizon-testnet.stellar.org")
-    account = server.accounts().account_id(public_key).call()
-    return JsonResponse({'balance': account['balances'][0]['balance']})
-
+    try:
+        public_key = request.POST.get('public_key')
+        if not public_key:
+            wallet = Wallet.objects.filter(user=request.user).first()
+            if not wallet:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'No wallet found for user'
+                }, status=404)
+            public_key = wallet.public_key
+        
+        if not is_valid_stellar_address(public_key):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Invalid Stellar address'
+            }, status=400)
+        
+        server = Server("https://horizon-testnet.stellar.org")
+        account = server.accounts().account_id(public_key).call()
+        return JsonResponse({
+            'status': 'success',
+            'balance': account['balances'][0]['balance']
+        })
+    except NotFoundError:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Account not found on the Stellar network'
+        }, status=404)
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Error checking balance: {str(e)}'
+        }, status=500)
 
 @login_required
 def send_money(request):
     if request.method == 'POST':
-        data = json.loads(request.body)
-        destination_public_key = data.get('recipient')
-        amount = data.get('amount')
-        encryption_key = data.get('transaction_password')
-        wallet = Wallet.objects.filter(user=request.user)[0]
-        server = Server("https://horizon-testnet.stellar.org")
-        source_keypair = Keypair.from_secret(cryptocode.decrypt(wallet.secret_seed, encryption_key))
-        destination_account = server.load_account(destination_public_key)
-        transaction = TransactionBuilder(
-            source_account=server.load_account(source_keypair.public_key),
-            network_passphrase=Network.TESTNET_NETWORK_PASSPHRASE,
-            base_fee=100
-        ).append_payment_op(
-            destination=destination_public_key,
-            amount=amount,
-            asset=Asset.native()
-        ).set_timeout(30).build()
-        transaction.sign(source_keypair)
-        response = server.submit_transaction(transaction)
-        return JsonResponse({'message': 'Payment sent successfully', 'status': 'success'})
+        try:
+            data = json.loads(request.body)
+            destination_public_key = data.get('recipient')
+            amount = data.get('amount')
+            encryption_key = data.get('transaction_password')
+            
+            if not destination_public_key or not amount or not encryption_key:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Missing required fields'
+                }, status=400)
+            
+            if not is_valid_stellar_address(destination_public_key):
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Invalid recipient address'
+                }, status=400)
+            
+            try:
+                amount_float = float(amount)
+                if amount_float <= 0:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Amount must be greater than 0'
+                    }, status=400)
+            except ValueError:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Invalid amount format'
+                }, status=400)
+            
+            wallet = Wallet.objects.filter(user=request.user).first()
+            if not wallet:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'No wallet found for user'
+                }, status=404)
+            
+            server = Server("https://horizon-testnet.stellar.org")
+            
+            decrypted_secret = cryptocode.decrypt(wallet.secret_seed, encryption_key)
+            if not decrypted_secret:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Incorrect transaction password'
+                }, status=401)
+            
+            source_keypair = Keypair.from_secret(decrypted_secret)
+            
+            try:
+                destination_account = server.load_account(destination_public_key)
+            except NotFoundError:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Recipient account not found on Stellar network'
+                }, status=404)
+            
+            transaction = TransactionBuilder(
+                source_account=server.load_account(source_keypair.public_key),
+                network_passphrase=Network.TESTNET_NETWORK_PASSPHRASE,
+                base_fee=100
+            ).append_payment_op(
+                destination=destination_public_key,
+                amount=str(amount),
+                asset=Asset.native()
+            ).set_timeout(30).build()
+            
+            transaction.sign(source_keypair)
+            response = server.submit_transaction(transaction)
+            
+            return JsonResponse({
+                'message': 'Payment sent successfully',
+                'status': 'success',
+                'transaction_hash': response['hash']
+            })
+        
+        except BadRequestError as e:
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Transaction failed: {str(e)}'
+            }, status=400)
+        except Exception as e:
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Error sending payment: {str(e)}'
+            }, status=500)
     else:
-        pass
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Method not allowed'
+        }, status=405)
 
+def is_valid_stellar_address(address):
+    if not address or not isinstance(address, str):
+        return False
+    if len(address) != 56:
+        return False
+    if not address.startswith('G'):
+        return False
+    if not re.match(r'^[A-Z2-7]+$', address):
+        return False
+    return True
 
 @login_required
 def dashboard(request):
     wallet_exists = Wallet.objects.filter(user=request.user).exists()
     if not wallet_exists:
         return render(request, 'dashboard.html', {'wallet_exists': wallet_exists})
-    wallet = Wallet.objects.filter(user=request.user)[0]
-    server = Server("https://horizon-testnet.stellar.org")
-    account = server.accounts().account_id(wallet.public_key).call()
-    balance = account['balances'][0]['balance']
-    context = {
-        'wallet_exists': wallet_exists,
-        'balance': balance,
-        'public_key': wallet.public_key
-    }
+    
+    wallet = Wallet.objects.filter(user=request.user).first()
+    try:
+        server = Server("https://horizon-testnet.stellar.org")
+        account = server.accounts().account_id(wallet.public_key).call()
+        balance = account['balances'][0]['balance']
+        context = {
+            'wallet_exists': wallet_exists,
+            'balance': balance,
+            'public_key': wallet.public_key
+        }
+    except Exception as e:
+        context = {
+            'wallet_exists': wallet_exists,
+            'balance': '0',
+            'public_key': wallet.public_key,
+            'error': f'Error loading wallet data: {str(e)}'
+        }
     return render(request, 'dashboard.html', context)
+
+@login_required
+def transaction_history(request):
+    try:
+        wallet = Wallet.objects.filter(user=request.user).first()
+        if not wallet:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'No wallet found'
+            }, status=404)
+        
+        server = Server("https://horizon-testnet.stellar.org")
+        transactions = server.transactions().for_account(wallet.public_key).limit(20).order(desc=True).call()
+        
+        transaction_list = []
+        for tx in transactions['_embedded']['records']:
+            operations = server.operations().for_transaction(tx['hash']).call()
+            
+            for op in operations['_embedded']['records']:
+                if op['type'] == 'payment' or op['type'] == 'create_account':
+                    transaction_list.append({
+                        'hash': tx['hash'],
+                        'created_at': tx['created_at'],
+                        'type': op['type'],
+                        'from': op.get('from', op.get('funder', 'N/A')),
+                        'to': op.get('to', op.get('account', 'N/A')),
+                        'amount': op.get('amount', op.get('starting_balance', '0')),
+                        'asset_type': op.get('asset_type', 'native')
+                    })
+        
+        return JsonResponse({
+            'status': 'success',
+            'transactions': transaction_list
+        })
+    
+    except NotFoundError:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Account not found'
+        }, status=404)
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Error fetching transactions: {str(e)}'
+        }, status=500)

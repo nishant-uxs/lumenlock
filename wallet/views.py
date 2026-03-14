@@ -78,6 +78,12 @@ def create_wallet(request):
 
 @login_required
 def check_balance(request):
+    if request.method != 'POST':
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Method not allowed'
+        }, status=405)
+    
     try:
         wallet = Wallet.objects.filter(user=request.user).first()
         if not wallet:

@@ -38,7 +38,7 @@ def create_wallet(request):
     
     try:
         with transaction.atomic():
-            if Wallet.objects.filter(user=request.user).exists():
+            if Wallet.objects.select_for_update().filter(user=request.user).exists():
                 return redirect('dashboard')
             
             keypair = Keypair.random()
@@ -172,7 +172,9 @@ def send_money(request):
                     'status': 'error',
                     'message': 'Amount must be greater than 0'
                 }, status=400)
-            if amount_decimal.as_tuple().exponent < -7:
+            
+            normalized = amount_decimal.normalize()
+            if normalized.as_tuple().exponent < -7:
                 return JsonResponse({
                     'status': 'error',
                     'message': 'Amount cannot have more than 7 decimal places'

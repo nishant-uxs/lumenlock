@@ -13,6 +13,8 @@ import json
 import re
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 import logging
+from urllib.parse import urlparse
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +29,6 @@ def create_wallet(request):
             'message': 'Method not allowed'
         }, status=405)
     
-    if Wallet.objects.filter(user=request.user).exists():
-        return redirect('dashboard')
-    
     encryption_key = request.POST.get('password')
     if not encryption_key or len(encryption_key) < 8:
         return JsonResponse({
@@ -38,20 +37,25 @@ def create_wallet(request):
         }, status=400)
     
     try:
-        keypair = Keypair.random()
-        encrypted_secret_seed = cryptocode.encrypt(keypair.secret, encryption_key)
+        with transaction.atomic():
+            if Wallet.objects.filter(user=request.user).exists():
+                return redirect('dashboard')
+            
+            keypair = Keypair.random()
+            encrypted_secret_seed = cryptocode.encrypt(keypair.secret, encryption_key)
+            
+            if not encrypted_secret_seed:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Failed to encrypt wallet secret'
+                }, status=500)
+            
+            wallet = Wallet.objects.create(
+                user=request.user,
+                public_key=keypair.public_key,
+                secret_seed=encrypted_secret_seed
+            )
         
-        if not encrypted_secret_seed:
-            return JsonResponse({
-                'status': 'error',
-                'message': 'Failed to encrypt wallet secret'
-            }, status=500)
-        
-        wallet = Wallet.objects.create(
-            user=request.user,
-            public_key=keypair.public_key,
-            secret_seed=encrypted_secret_seed
-        )
         url = "https://friendbot.stellar.org"
         response = requests.get(url, params={"addr": keypair.public_key}, timeout=10)
         
@@ -374,8 +378,14 @@ def transaction_history(request):
             if not next_link:
                 break
             
-            if not next_link.startswith(horizon_base_url):
-                logger.warning(f'Untrusted pagination URL detected: {next_link}')
+            try:
+                parsed_url = urlparse(next_link)
+                expected_parsed = urlparse(horizon_base_url)
+                if parsed_url.scheme != expected_parsed.scheme or parsed_url.netloc != expected_parsed.netloc:
+                    logger.warning(f'Untrusted pagination URL detected: {next_link}')
+                    break
+            except Exception as e:
+                logger.warning(f'Failed to parse pagination URL: {str(e)}')
                 break
             
             if page_num == max_pages - 1:
@@ -383,7 +393,7 @@ def transaction_history(request):
                 break
             
             try:
-                response = requests.get(next_link, timeout=10)
+                response = requests.get(next_link, timeout=10, allow_redirects=False)
                 if not response.ok:
                     logger.warning(f'Horizon pagination returned status {response.status_code}')
                     break

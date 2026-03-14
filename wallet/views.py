@@ -298,28 +298,44 @@ def transaction_history(request):
         
         server = Server("https://horizon-testnet.stellar.org")
         server.client.request_timeout = 10
-        operations = server.operations().for_account(wallet.public_key).limit(100).order(desc=True).include_transactions(True).call()
         
+        target_count = 20
+        max_pages = 5
         transaction_list = []
-        embedded = operations.get('_embedded', {})
-        records = embedded.get('records', [])
         
-        for op in records:
-            op_type = op.get('type')
-            if op_type == 'payment' or op_type == 'create_account':
-                tx = op.get('transaction')
-                transaction_list.append({
-                    'hash': op.get('transaction_hash', 'N/A'),
-                    'created_at': op.get('created_at', ''),
-                    'type': op_type,
-                    'from': op.get('from', op.get('funder', 'N/A')),
-                    'to': op.get('to', op.get('account', 'N/A')),
-                    'amount': op.get('amount', op.get('starting_balance', '0')),
-                    'asset_type': op.get('asset_type', 'native')
-                })
-                
-                if len(transaction_list) >= 20:
-                    break
+        call_builder = server.operations().for_account(wallet.public_key).limit(50).order(desc=True)
+        page = call_builder.call()
+        
+        for _ in range(max_pages):
+            embedded = page.get('_embedded', {})
+            records = embedded.get('records', [])
+            
+            if not records:
+                break
+            
+            for op in records:
+                op_type = op.get('type')
+                if op_type == 'payment' or op_type == 'create_account':
+                    transaction_list.append({
+                        'hash': op.get('transaction_hash', 'N/A'),
+                        'created_at': op.get('created_at', ''),
+                        'type': op_type,
+                        'from': op.get('from', op.get('funder', 'N/A')),
+                        'to': op.get('to', op.get('account', 'N/A')),
+                        'amount': op.get('amount', op.get('starting_balance', '0')),
+                        'asset_type': op.get('asset_type', 'native')
+                    })
+                    
+                    if len(transaction_list) >= target_count:
+                        break
+            
+            if len(transaction_list) >= target_count:
+                break
+            
+            next_link = page.get('_links', {}).get('next', {}).get('href')
+            if not next_link:
+                break
+            page = requests.get(next_link, timeout=10).json()
         
         return JsonResponse({
             'status': 'success',

@@ -323,8 +323,8 @@
       const shortTo = escapeHtml(to.substring(0, 8) + "...");
       const type = escapeHtml(tx.type || 'unknown');
       
-      const rawAmount = tx.amount || '0';
-      const formattedAmount = parseFloat(rawAmount).toFixed(7).replace(/\.?0+$/, '');
+      const rawAmount = String(tx.amount || '0');
+      const formattedAmount = /^\d+(\.\d+)?$/.test(rawAmount) ? rawAmount.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : '0';
       const assetType = tx.asset_type === 'native' ? 'XLM' : escapeHtml(tx.asset_type || 'XLM');
       
       tableHTML += `

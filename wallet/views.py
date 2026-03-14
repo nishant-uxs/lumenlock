@@ -324,6 +324,18 @@ def dashboard(request):
 
 @login_required
 def transaction_history(request):
+    """
+    Returns payment and account creation history for the user's wallet.
+    
+    Note: Uses operations endpoint instead of transactions endpoint because:
+    1. We only care about payment/create_account operations (not all transaction types)
+    2. Operations provide direct access to amount, from, to fields
+    3. This is a common pattern for wallet payment history in Stellar
+    4. Each operation represents one meaningful action for the user
+    
+    If transaction-level grouping is needed in the future, consider using
+    transactions endpoint with include_operations parameter.
+    """
     try:
         wallet = Wallet.objects.filter(user=request.user).first()
         if not wallet:

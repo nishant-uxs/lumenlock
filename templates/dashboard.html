@@ -289,6 +289,15 @@
   function displayTransactionHistory(transactions) {
     const content = document.getElementById("transactionHistoryContent");
     
+    if (!Array.isArray(transactions)) {
+      content.innerHTML = `
+        <div class="text-center py-8">
+          <p class="text-error">Invalid transaction data received</p>
+        </div>
+      `;
+      return;
+    }
+    
     if (transactions.length === 0) {
       content.innerHTML = `
         <div class="text-center py-8">

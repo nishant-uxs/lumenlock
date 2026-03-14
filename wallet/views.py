@@ -12,6 +12,9 @@ from django.shortcuts import redirect
 import json
 import re
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
+import logging
+
+logger = logging.getLogger(__name__)
 
 def home(request):
     return render(request, 'home.html')
@@ -48,11 +51,12 @@ def create_wallet(request):
         
         return redirect('dashboard')
     except Exception as e:
+        logger.error(f'Error creating wallet for user {request.user.id}: {str(e)}', exc_info=True)
         if 'wallet' in locals():
             wallet.delete()
         return JsonResponse({
             'status': 'error',
-            'message': f'Error creating wallet: {str(e)}'
+            'message': 'Failed to create wallet. Please try again later.'
         }, status=500)
 
 @login_required
@@ -107,9 +111,10 @@ def check_balance(request):
             'message': 'Account not found on the Stellar network'
         }, status=404)
     except Exception as e:
+        logger.error(f'Error checking balance for user {request.user.id}: {str(e)}', exc_info=True)
         return JsonResponse({
             'status': 'error',
-            'message': f'Error checking balance: {str(e)}'
+            'message': 'Failed to check balance. Please try again later.'
         }, status=500)
 
 @login_required
@@ -209,18 +214,20 @@ def send_money(request):
             return JsonResponse({
                 'message': 'Payment sent successfully',
                 'status': 'success',
-                'transaction_hash': response['hash']
+                'transaction_hash': response.get('hash', 'N/A')
             })
         
         except BadRequestError as e:
+            logger.warning(f'Transaction failed for user {request.user.id}: {str(e)}')
             return JsonResponse({
                 'status': 'error',
-                'message': f'Transaction failed: {str(e)}'
+                'message': 'Transaction failed. Please check your balance and try again.'
             }, status=400)
         except Exception as e:
+            logger.error(f'Error sending payment for user {request.user.id}: {str(e)}', exc_info=True)
             return JsonResponse({
                 'status': 'error',
-                'message': f'Error sending payment: {str(e)}'
+                'message': 'Failed to send payment. Please try again later.'
             }, status=500)
     else:
         return JsonResponse({
@@ -271,11 +278,12 @@ def dashboard(request):
             'public_key': wallet.public_key
         }
     except Exception as e:
+        logger.error(f'Error loading dashboard for user {request.user.id}: {str(e)}', exc_info=True)
         context = {
             'wallet_exists': True,
             'balance': '0',
             'public_key': wallet.public_key if wallet else '',
-            'error': f'Error loading wallet data: {str(e)}'
+            'error': 'Failed to load wallet data. Please refresh the page.'
         }
     return render(request, 'dashboard.html', context)
 
@@ -294,13 +302,17 @@ def transaction_history(request):
         operations = server.operations().for_account(wallet.public_key).limit(20).order(desc=True).include_transactions(True).call()
         
         transaction_list = []
-        for op in operations['_embedded']['records']:
-            if op['type'] == 'payment' or op['type'] == 'create_account':
+        embedded = operations.get('_embedded', {})
+        records = embedded.get('records', [])
+        
+        for op in records:
+            op_type = op.get('type')
+            if op_type == 'payment' or op_type == 'create_account':
                 tx = op.get('transaction')
                 transaction_list.append({
                     'hash': op.get('transaction_hash', 'N/A'),
                     'created_at': op.get('created_at', ''),
-                    'type': op['type'],
+                    'type': op_type,
                     'from': op.get('from', op.get('funder', 'N/A')),
                     'to': op.get('to', op.get('account', 'N/A')),
                     'amount': op.get('amount', op.get('starting_balance', '0')),
@@ -318,7 +330,8 @@ def transaction_history(request):
             'message': 'Account not found'
         }, status=404)
     except Exception as e:
+        logger.error(f'Error fetching transaction history for user {request.user.id}: {str(e)}', exc_info=True)
         return JsonResponse({
             'status': 'error',
-            'message': f'Error fetching transactions: {str(e)}'
+            'message': 'Failed to load transaction history. Please try again later.'
         }, status=500)

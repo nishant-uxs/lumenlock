@@ -11,6 +11,7 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect
 import json
 import re
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 def home(request):
     return render(request, 'home.html')
@@ -54,6 +55,7 @@ def create_wallet(request):
             'message': f'Error creating wallet: {str(e)}'
         }, status=500)
 
+@login_required
 def check_balance(request):
     try:
         public_key = request.POST.get('public_key')
@@ -73,6 +75,7 @@ def check_balance(request):
             }, status=400)
         
         server = Server("https://horizon-testnet.stellar.org")
+        server.client.request_timeout = 10
         account = server.accounts().account_id(public_key).call()
         return JsonResponse({
             'status': 'success',
@@ -117,13 +120,19 @@ def send_money(request):
                 }, status=400)
             
             try:
-                amount_float = float(amount)
-                if amount_float <= 0:
+                amount_decimal = Decimal(str(amount))
+                if amount_decimal <= 0:
                     return JsonResponse({
                         'status': 'error',
                         'message': 'Amount must be greater than 0'
                     }, status=400)
-            except ValueError:
+                if amount_decimal.as_tuple().exponent < -7:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Amount cannot have more than 7 decimal places'
+                    }, status=400)
+                amount = str(amount_decimal.quantize(Decimal('0.0000001'), rounding=ROUND_DOWN))
+            except (ValueError, InvalidOperation):
                 return JsonResponse({
                     'status': 'error',
                     'message': 'Invalid amount format'
@@ -137,6 +146,7 @@ def send_money(request):
                 }, status=404)
             
             server = Server("https://horizon-testnet.stellar.org")
+            server.client.request_timeout = 10
             
             decrypted_secret = cryptocode.decrypt(wallet.secret_seed, encryption_key)
             if not decrypted_secret:
@@ -161,7 +171,7 @@ def send_money(request):
                 base_fee=100
             ).append_payment_op(
                 destination=destination_public_key,
-                amount=str(amount),
+                amount=amount,
                 asset=Asset.native()
             ).set_timeout(30).build()
             
@@ -214,6 +224,7 @@ def dashboard(request):
     wallet = Wallet.objects.filter(user=request.user).first()
     try:
         server = Server("https://horizon-testnet.stellar.org")
+        server.client.request_timeout = 10
         account = server.accounts().account_id(wallet.public_key).call()
         balance = account['balances'][0]['balance']
         context = {
@@ -241,6 +252,7 @@ def transaction_history(request):
             }, status=404)
         
         server = Server("https://horizon-testnet.stellar.org")
+        server.client.request_timeout = 10
         operations = server.operations().for_account(wallet.public_key).limit(20).order(desc=True).include_transactions(True).call()
         
         transaction_list = []

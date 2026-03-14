@@ -77,9 +77,29 @@ def check_balance(request):
         server = Server("https://horizon-testnet.stellar.org")
         server.client.request_timeout = 10
         account = server.accounts().account_id(public_key).call()
+        
+        balances = account.get('balances', [])
+        if not balances:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'No balances found for account'
+            }, status=404)
+        
+        native_balance = None
+        for balance in balances:
+            if balance.get('asset_type') == 'native':
+                native_balance = balance.get('balance', '0')
+                break
+        
+        if native_balance is None:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Native XLM balance not found'
+            }, status=404)
+        
         return JsonResponse({
             'status': 'success',
-            'balance': account['balances'][0]['balance']
+            'balance': native_balance
         })
     except NotFoundError:
         return JsonResponse({
@@ -131,7 +151,15 @@ def send_money(request):
                         'status': 'error',
                         'message': 'Amount cannot have more than 7 decimal places'
                     }, status=400)
-                amount = str(amount_decimal.quantize(Decimal('0.0000001'), rounding=ROUND_DOWN))
+                
+                quantized_amount = amount_decimal.quantize(Decimal('0.0000001'), rounding=ROUND_DOWN)
+                if quantized_amount <= 0:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Amount too small (minimum 0.0000001 XLM)'
+                    }, status=400)
+                
+                amount = str(quantized_amount)
             except (ValueError, InvalidOperation):
                 return JsonResponse({
                     'status': 'error',
@@ -226,10 +254,17 @@ def dashboard(request):
         server = Server("https://horizon-testnet.stellar.org")
         server.client.request_timeout = 10
         account = server.accounts().account_id(wallet.public_key).call()
-        balance = account['balances'][0]['balance']
+        
+        balances = account.get('balances', [])
+        native_balance = '0'
+        for balance in balances:
+            if balance.get('asset_type') == 'native':
+                native_balance = balance.get('balance', '0')
+                break
+        
         context = {
             'wallet_exists': wallet_exists,
-            'balance': balance,
+            'balance': native_balance,
             'public_key': wallet.public_key
         }
     except Exception as e:

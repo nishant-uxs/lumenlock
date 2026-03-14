@@ -62,15 +62,14 @@ def create_wallet(request):
 @login_required
 def check_balance(request):
     try:
-        public_key = request.POST.get('public_key')
-        if not public_key:
-            wallet = Wallet.objects.filter(user=request.user).first()
-            if not wallet:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'No wallet found for user'
-                }, status=404)
-            public_key = wallet.public_key
+        wallet = Wallet.objects.filter(user=request.user).first()
+        if not wallet:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'No wallet found for user'
+            }, status=404)
+        
+        public_key = wallet.public_key
         
         if not is_valid_stellar_address(public_key):
             return JsonResponse({
@@ -299,7 +298,7 @@ def transaction_history(request):
         
         server = Server("https://horizon-testnet.stellar.org")
         server.client.request_timeout = 10
-        operations = server.operations().for_account(wallet.public_key).limit(20).order(desc=True).include_transactions(True).call()
+        operations = server.operations().for_account(wallet.public_key).limit(100).order(desc=True).include_transactions(True).call()
         
         transaction_list = []
         embedded = operations.get('_embedded', {})
@@ -318,6 +317,9 @@ def transaction_history(request):
                     'amount': op.get('amount', op.get('starting_balance', '0')),
                     'asset_type': op.get('asset_type', 'native')
                 })
+                
+                if len(transaction_list) >= 20:
+                    break
         
         return JsonResponse({
             'status': 'success',

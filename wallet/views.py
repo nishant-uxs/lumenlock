@@ -329,11 +329,13 @@ def transaction_history(request):
         target_count = 20
         max_pages = 5
         transaction_list = []
+        horizon_base_url = "https://horizon-testnet.stellar.org"
+        hit_max_pages = False
         
         call_builder = server.operations().for_account(wallet.public_key).limit(50).order(desc=True)
         page = call_builder.call()
         
-        for _ in range(max_pages):
+        for page_num in range(max_pages):
             embedded = page.get('_embedded', {})
             records = embedded.get('records', [])
             
@@ -363,6 +365,14 @@ def transaction_history(request):
             if not next_link:
                 break
             
+            if not next_link.startswith(horizon_base_url):
+                logger.warning(f'Untrusted pagination URL detected: {next_link}')
+                break
+            
+            if page_num == max_pages - 1:
+                hit_max_pages = True
+                break
+            
             try:
                 response = requests.get(next_link, timeout=10)
                 if not response.ok:
@@ -373,10 +383,12 @@ def transaction_history(request):
                 logger.warning(f'Error fetching next page of transactions: {str(e)}')
                 break
         
+        has_more = page.get('_links', {}).get('next', {}).get('href') is not None
+        
         return JsonResponse({
             'status': 'success',
             'transactions': transaction_list,
-            'truncated': len(transaction_list) < target_count and len(records) > 0
+            'truncated': (len(transaction_list) < target_count and has_more) or hit_max_pages
         })
     
     except NotFoundError:

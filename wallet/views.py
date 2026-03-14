@@ -187,7 +187,21 @@ def send_money(request):
                     'message': 'Incorrect transaction password'
                 }, status=401)
             
-            source_keypair = Keypair.from_secret(decrypted_secret)
+            try:
+                source_keypair = Keypair.from_secret(decrypted_secret)
+            except Exception:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Incorrect transaction password'
+                }, status=401)
+            
+            try:
+                source_account = server.load_account(source_keypair.public_key)
+            except NotFoundError:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Your wallet account not found. Please ensure it is funded.'
+                }, status=404)
             
             try:
                 destination_account = server.load_account(destination_public_key)
@@ -198,7 +212,7 @@ def send_money(request):
                 }, status=404)
             
             transaction = TransactionBuilder(
-                source_account=server.load_account(source_keypair.public_key),
+                source_account=source_account,
                 network_passphrase=Network.TESTNET_NETWORK_PASSPHRASE,
                 base_fee=100
             ).append_payment_op(
@@ -335,7 +349,16 @@ def transaction_history(request):
             next_link = page.get('_links', {}).get('next', {}).get('href')
             if not next_link:
                 break
-            page = requests.get(next_link, timeout=10).json()
+            
+            try:
+                response = requests.get(next_link, timeout=10)
+                if not response.ok:
+                    logger.warning(f'Horizon pagination returned status {response.status_code}')
+                    break
+                page = response.json()
+            except (requests.RequestException, json.JSONDecodeError) as e:
+                logger.warning(f'Error fetching next page of transactions: {str(e)}')
+                break
         
         return JsonResponse({
             'status': 'success',
